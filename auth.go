@@ -3,12 +3,21 @@ package http_digest_auth
 import (
 	"crypto/md5"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/base64"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
+	"time"
+)
+
+var (
+	connectTimeOut   = time.Duration(10 * time.Second)
+	readWriteTimeout = time.Duration(20 * time.Second)
 )
 
 type myjar struct {
@@ -24,7 +33,7 @@ func (p *myjar) Cookies(u *url.URL) []*http.Cookie {
 }
 
 func Auth(username string, password string, uri string) (bool, error) {
-	client := &http.Client{}
+	client := DefaultTimeoutClient()
 	jar := &myjar{}
 	jar.jar = make(map[string][]*http.Cookie)
 	client.Jar = jar
@@ -113,4 +122,44 @@ func H(data string) string {
 	digest := md5.New()
 	digest.Write([]byte(data))
 	return fmt.Sprintf("%x", digest.Sum(nil))
+}
+
+func timeoutDialer(cTimeout time.Duration, rwTimeout time.Duration) func(net, addr string) (c net.Conn, err error) {
+	return func(netw, addr string) (net.Conn, error) {
+		conn, err := net.DialTimeout(netw, addr, cTimeout)
+		if err != nil {
+			return nil, err
+		}
+		if rwTimeout > 0 {
+			conn.SetDeadline(time.Now().Add(rwTimeout))
+		}
+		return conn, nil
+	}
+}
+
+// apps will set two OS variables:
+// atscale_http_sslcert - location of the http ssl cert
+// atscale_http_sslkey - location of the http ssl key
+func NewTimeoutClient(cTimeout time.Duration, rwTimeout time.Duration) *http.Client {
+	certLocation := os.Getenv("atscale_http_sslcert")
+	keyLocation := os.Getenv("atscale_http_sslkey")
+	// default
+	tlsConfig := &tls.Config{InsecureSkipVerify: true}
+	if len(certLocation) > 0 && len(keyLocation) > 0 {
+		// Load client cert if available
+		cert, err := tls.LoadX509KeyPair(certLocation, keyLocation)
+		if err == nil {
+			tlsConfig = &tls.Config{Certificates: []tls.Certificate{cert}, InsecureSkipVerify: true}
+		}
+	}
+	return &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: tlsConfig,
+			Dial:            timeoutDialer(cTimeout, rwTimeout),
+		},
+	}
+}
+
+func DefaultTimeoutClient() *http.Client {
+	return NewTimeoutClient(connectTimeOut, readWriteTimeout)
 }
