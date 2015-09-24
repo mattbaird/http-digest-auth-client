@@ -48,6 +48,7 @@ func Auth(username string, password string, uri string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized {
 		var authorization map[string]string = DigestAuthParams(resp)
 		realmHeader := authorization["realm"]
@@ -76,6 +77,10 @@ func Auth(username string, password string, uri string) (bool, error) {
 			username, realmHeader, nonceHeader, "/auth", cnonce, qopHeader, response, opaqueHeader)
 		req.Header.Set("Authorization", AuthHeader)
 		resp, err = client.Do(req)
+		if err != nil {
+			return false, err
+		}
+		defer resp.Body.Close()
 	} else {
 		return false, fmt.Errorf("response status code should have been 401, it was %v", resp.StatusCode)
 	}
