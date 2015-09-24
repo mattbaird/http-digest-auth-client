@@ -1,11 +1,10 @@
 package http_digest_auth
 
 import (
-	"fmt"
-	//	"io/ioutil"
 	"crypto/md5"
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -33,11 +32,14 @@ func Auth(username string, password string, uri string) (bool, error) {
 	var resp *http.Response
 	var err error
 	req, err = http.NewRequest("GET", uri, nil)
+	if err != nil {
+		return false, err
+	}
 	resp, err = client.Do(req)
 	if err != nil {
 		return false, err
 	}
-	if resp.StatusCode == 401 {
+	if resp.StatusCode == http.StatusUnauthorized {
 		var authorization map[string]string = DigestAuthParams(resp)
 		realmHeader := authorization["realm"]
 		qopHeader := authorization["qop"]
@@ -68,7 +70,7 @@ func Auth(username string, password string, uri string) (bool, error) {
 	} else {
 		return false, fmt.Errorf("response status code should have been 401, it was %v", resp.StatusCode)
 	}
-	return resp.StatusCode == 200, err
+	return resp.StatusCode == http.StatusOK, err
 }
 
 /*
