@@ -155,6 +155,8 @@ func NewTimeoutClient(cTimeout time.Duration, rwTimeout time.Duration) *http.Cli
 		cert, err := tls.LoadX509KeyPair(certLocation, keyLocation)
 		if err == nil {
 			tlsConfig = &tls.Config{Certificates: []tls.Certificate{cert}, InsecureSkipVerify: true}
+		} else {
+			fmt.Printf("Error loading X509 Key Pair:%v\n", err)
 		}
 	}
 	return &http.Client{
