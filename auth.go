@@ -5,8 +5,10 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"net/url"
@@ -18,6 +20,7 @@ import (
 var (
 	connectTimeOut   = time.Duration(10 * time.Second)
 	readWriteTimeout = time.Duration(20 * time.Second)
+	userAgent        = "AtScale"
 )
 
 type myjar struct {
@@ -48,38 +51,61 @@ func Auth(username string, password string, uri string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	headers := http.Header{
+		"User-Agent":      []string{userAgent},
+		"Accept":          []string{"*/*"},
+		"Accept-Encoding": []string{"identity"},
+		"Connection":      []string{"Keep-Alive"},
+		"Host":            []string{req.Host},
+	}
+	req.Header = headers
+
 	resp, err = client.Do(req)
 	if err != nil {
 		return false, err
 	}
-	defer resp.Body.Close()
+	// you HAVE to read the whole body and then close it to reuse the http connection
+	// otherwise it *could* fail in certain environments (behind proxy for instance)
+	io.Copy(ioutil.Discard, resp.Body)
+	resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized {
 		var authorization map[string]string = DigestAuthParams(resp)
 		realmHeader := authorization["realm"]
 		qopHeader := authorization["qop"]
 		nonceHeader := authorization["nonce"]
 		opaqueHeader := authorization["opaque"]
+		algorithm := authorization["algorithm"]
 		realm := realmHeader
 		// A1
 		h := md5.New()
 		A1 := fmt.Sprintf("%s:%s:%s", username, realm, password)
 		io.WriteString(h, A1)
-		HA1 := fmt.Sprintf("%x", h.Sum(nil))
+		HA1 := hex.EncodeToString(h.Sum(nil))
 
 		// A2
 		h = md5.New()
 		A2 := fmt.Sprintf("GET:%s", "/auth")
 		io.WriteString(h, A2)
-		HA2 := fmt.Sprintf("%x", h.Sum(nil))
+		HA2 := hex.EncodeToString(h.Sum(nil))
 
 		// response
 		cnonce := RandomKey()
 		response := H(strings.Join([]string{HA1, nonceHeader, nc, cnonce, qopHeader, HA2}, ":"))
 
 		// now make header
-		AuthHeader := fmt.Sprintf(`Digest username="%s", realm="%s", nonce="%s", uri="%s", cnonce="%s", nc=%s, qop=%s, response="%s", opaque="%s", algorithm=MD5`,
-			username, realmHeader, nonceHeader, "/auth", cnonce, nc, qopHeader, response, opaqueHeader)
-		req.Header.Set("Authorization", AuthHeader)
+		AuthHeader := fmt.Sprintf(`Digest username="%s", realm="%s", nonce="%s", uri="%s", response="%s", qop=%s, nc=%s, cnonce="%s", opaque="%s", algorithm="%s"`,
+			username, realmHeader, nonceHeader, "/auth", response, qopHeader, nc, cnonce, opaqueHeader, algorithm)
+
+		headers := http.Header{
+			"User-Agent":      []string{userAgent},
+			"Accept":          []string{"*/*"},
+			"Accept-Encoding": []string{"identity"},
+			"Connection":      []string{"Keep-Alive"},
+			"Host":            []string{req.Host},
+			"Authorization":   []string{AuthHeader},
+		}
+		//req, err = http.NewRequest("GET", uri, nil)
+		req.Header = headers
 		resp, err = client.Do(req)
 		if err != nil {
 			return false, err
@@ -113,7 +139,7 @@ func DigestAuthParams(r *http.Response) map[string]string {
 	return result
 }
 func RandomKey() string {
-	k := make([]byte, 12)
+	k := make([]byte, 8)
 	for bytes := 0; bytes < len(k); {
 		n, err := rand.Read(k[bytes:])
 		if err != nil {
@@ -130,7 +156,7 @@ func RandomKey() string {
 func H(data string) string {
 	digest := md5.New()
 	digest.Write([]byte(data))
-	return fmt.Sprintf("%x", digest.Sum(nil))
+	return hex.EncodeToString(digest.Sum(nil))
 }
 
 func timeoutDialer(cTimeout time.Duration, rwTimeout time.Duration) func(net, addr string) (c net.Conn, err error) {
@@ -146,9 +172,10 @@ func timeoutDialer(cTimeout time.Duration, rwTimeout time.Duration) func(net, ad
 	}
 }
 
-// apps will set two OS variables:
+// apps will set three OS variables:
 // atscale_http_sslcert - location of the http ssl cert
 // atscale_http_sslkey - location of the http ssl key
+// atscale_disable_keepalives - disable http keep alives
 func NewTimeoutClient(cTimeout time.Duration, rwTimeout time.Duration) *http.Client {
 	certLocation := os.Getenv("atscale_http_sslcert")
 	keyLocation := os.Getenv("atscale_http_sslkey")
