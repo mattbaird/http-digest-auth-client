@@ -32,6 +32,10 @@ func (p *myjar) Cookies(u *url.URL) []*http.Cookie {
 	return p.jar[u.Host]
 }
 
+const (
+	nc = "00000001"
+)
+
 func Auth(username string, password string, uri string) (bool, error) {
 	client := DefaultTimeoutClient()
 	jar := &myjar{}
@@ -70,11 +74,11 @@ func Auth(username string, password string, uri string) (bool, error) {
 
 		// response
 		cnonce := RandomKey()
-		response := H(strings.Join([]string{HA1, nonceHeader, "00000001", cnonce, qopHeader, HA2}, ":"))
+		response := H(strings.Join([]string{HA1, nonceHeader, nc, cnonce, qopHeader, HA2}, ":"))
 
 		// now make header
-		AuthHeader := fmt.Sprintf(`Digest username="%s", realm="%s", nonce="%s", uri="%s", cnonce="%s", nc=00000001, qop=%s, response="%s", opaque="%s", algorithm=MD5`,
-			username, realmHeader, nonceHeader, "/auth", cnonce, qopHeader, response, opaqueHeader)
+		AuthHeader := fmt.Sprintf(`Digest username="%s", realm="%s", nonce="%s", uri="%s", cnonce="%s", nc=%s, qop=%s, response="%s", opaque="%s", algorithm=MD5`,
+			username, realmHeader, nonceHeader, "/auth", cnonce, nc, qopHeader, response, opaqueHeader)
 		req.Header.Set("Authorization", AuthHeader)
 		resp, err = client.Do(req)
 		if err != nil {
@@ -148,6 +152,12 @@ func timeoutDialer(cTimeout time.Duration, rwTimeout time.Duration) func(net, ad
 func NewTimeoutClient(cTimeout time.Duration, rwTimeout time.Duration) *http.Client {
 	certLocation := os.Getenv("atscale_http_sslcert")
 	keyLocation := os.Getenv("atscale_http_sslkey")
+	disableKeepAlives := os.Getenv("atscale_disable_keepalives")
+	disableKeepAlivesBool := false
+	if disableKeepAlives == "true" {
+		disableKeepAlivesBool = true
+	}
+
 	// default
 	tlsConfig := &tls.Config{InsecureSkipVerify: true}
 	if len(certLocation) > 0 && len(keyLocation) > 0 {
@@ -161,8 +171,9 @@ func NewTimeoutClient(cTimeout time.Duration, rwTimeout time.Duration) *http.Cli
 	}
 	return &http.Client{
 		Transport: &http.Transport{
-			TLSClientConfig: tlsConfig,
-			Dial:            timeoutDialer(cTimeout, rwTimeout),
+			TLSClientConfig:   tlsConfig,
+			DisableKeepAlives: disableKeepAlivesBool,
+			Dial:              timeoutDialer(cTimeout, rwTimeout),
 		},
 	}
 }
